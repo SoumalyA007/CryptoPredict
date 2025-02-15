@@ -1,22 +1,27 @@
-from fastapi import FastAPI, HTTPException
-import requests
-import pandas as pd
+import os
+import uvicorn
 import numpy as np
-from datetime import datetime
+import tensorflow as tf
+import pandas as pd
+from fastapi import FastAPI, HTTPException
+from tensorflow.keras.models import load_model
+from sklearn.preprocessing import MinMaxScaler
 from pycoingecko import CoinGeckoAPI
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from model import load_model_and_scaler, predict_future_prices
 
-app = FastAPI()
-
-# Initialize CoinGecko API and sentiment analyzer
+# Initialize API, sentiment analyzer, and FastAPI app
 cg = CoinGeckoAPI()
 sanalyzer = SentimentIntensityAnalyzer()
+app = FastAPI()
 
-# Load LSTM Model and Scaler
-model, scaler = load_model_and_scaler()
+# Load trained model
+model_path = "model.h5"
+if not os.path.exists(model_path):
+    raise FileNotFoundError(f"Model file {model_path} not found. Ensure it is uploaded.")
 
-# Fetch historical price data
+model = load_model(model_path)
+
+# Function to fetch historical price data
 def get_historical_data(coin_id, vs_currency, days=365):
     try:
         data = cg.get_coin_market_chart_by_id(id=coin_id, vs_currency=vs_currency, days=days)
@@ -27,45 +32,60 @@ def get_historical_data(coin_id, vs_currency, days=365):
         df['ma_30'] = df['price'].rolling(window=30).mean()
         df.dropna(inplace=True)
         return df[['price', 'ma_7', 'ma_30']]
-    except:
-        raise HTTPException(status_code=404, detail="Error fetching historical data")
-
-# Fetch current price
-def get_current_price(coin_id, vs_currency):
-    try:
-        data = cg.get_price(ids=coin_id, vs_currencies=vs_currency)
-        return data.get(coin_id, {}).get(vs_currency, None)
-    except:
-        return None
-
-# Fetch news sentiment
-def get_news_sentiment():
-    url = "https://newsapi.org/v2/everything?q=cryptocurrency&apiKey=YOUR_NEWSAPI_KEY"
-    response = requests.get(url).json()
-    scores = [sanalyzer.polarity_scores(article['title'])['compound'] for article in response.get('articles', [])]
-    return np.mean(scores) if scores else 0
-
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to the Crypto Prediction API"}
-
-@app.get("/predict/{coin_id}")
-def predict(coin_id: str):
-    try:
-        currency = "usd"
-        current_price = get_current_price(coin_id, currency)
-        if current_price is None:
-            raise HTTPException(status_code=404, detail="Invalid cryptocurrency name")
-
-        sentiment_score = get_news_sentiment()
-        df = get_historical_data(coin_id, currency)
-        predictions = predict_future_prices(model, scaler, df)
-
-        return {
-            "coin": coin_id,
-            "current_price": current_price,
-            "sentiment_score": sentiment_score,
-            "predictions": predictions
-        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Error fetching data: {str(e)}")
+
+# Function to fetch news sentiment score
+def get_news_sentiment():
+    try:
+        url = "https://newsapi.org/v2/everything?q=cryptocurrency&apiKey=YOUR_NEWSAPI_KEY"
+        response = requests.get(url).json()
+        scores = [sanalyzer.polarity_scores(article['title'])['compound'] for article in response['articles']]
+        return np.mean(scores) if scores else 0
+    except Exception as e:
+        return 0  # Return neutral sentiment if error occurs
+
+# Function to prepare data for prediction
+def prepare_data(df, seq_length=30):
+    scaler = MinMaxScaler()
+    df_scaled = scaler.fit_transform(df)
+
+    X = [df_scaled[-seq_length:]]  # Use last 30 days for prediction
+    return np.array(X), scaler
+
+# Prediction endpoint
+@app.get("/predict/")
+def predict_price(coin: str = "bitcoin", days: int = 30):
+    """
+    Predict future cryptocurrency price based on LSTM model.
+    Example URL: /predict/?coin=bitcoin&days=30
+    """
+    try:
+        df = get_historical_data(coin, "usd", 365)
+        df['sentiment'] = get_news_sentiment()
+
+        X, scaler = prepare_data(df)
+        future_prices = {}
+
+        for _ in range(days):
+            future_price_scaled = model.predict(X)[0][0]
+            X = np.roll(X, -1, axis=1)
+            X[0, -1, 0] = future_price_scaled  # Shift new prediction into input
+
+        future_price = scaler.inverse_transform([[future_price_scaled, 0, 0, 0]])[0][0]
+        future_prices[f"Predicted price in {days} days"] = future_price
+
+        return {"coin": coin, "predicted_price": future_prices}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+
+# Root endpoint
+@app.get("/")
+def home():
+    return {"message": "Crypto Price Prediction API is running!"}
+
+# Run server
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

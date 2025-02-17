@@ -24,6 +24,9 @@ model = load_model(model_path)
 # Function to fetch historical price data
 def get_historical_data(coin_id, vs_currency, days=365):
     try:
+        if days > 365:
+            raise HTTPException(status_code=400, detail="Free API only allows 365 days of historical data.")
+        
         data = cg.get_coin_market_chart_by_id(id=coin_id, vs_currency=vs_currency, days=days)
         df = pd.DataFrame(data['prices'], columns=['timestamp', 'price'])
         df['date'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -55,17 +58,17 @@ def prepare_data(df, seq_length=30):
 
 # Prediction endpoint
 @app.get("/predict/")
-def predict_price(coin: str = "bitcoin", days: int = 90):
+def predict_price(coin: str = "bitcoin", days: int = 30):
     """
     Predict future cryptocurrency price based on LSTM model.
-    Available prediction days: 90 (3 months), 180 (6 months), 365 (1 year), 1095 (3 years)
-    Example URL: /predict/?coin=bitcoin&days=90
+    Allowed days: 30, 90, 180, 330.
+    Example URL: /predict/?coin=bitcoin&days=30
     """
     try:
-        if days not in [90, 180, 365, 1095]:
-            raise HTTPException(status_code=400, detail="Invalid prediction period. Use 90, 180, 365, or 1095 days.")
+        if days not in [30, 90, 180, 330]:
+            raise HTTPException(status_code=400, detail="Allowed days: 30, 90, 180, 330.")
 
-        df = get_historical_data(coin, "usd", 365 * 3)  # Fetch 3 years of data
+        df = get_historical_data(coin, "usd", 365)
         df['sentiment'] = get_news_sentiment()
 
         X, scaler = prepare_data(df)
@@ -83,7 +86,6 @@ def predict_price(coin: str = "bitcoin", days: int = 90):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
-
 
 # Root endpoint
 @app.get("/")

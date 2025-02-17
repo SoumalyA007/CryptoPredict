@@ -16,7 +16,7 @@ def predict_future_prices(model, scaler, df, seq_length=30):
     last_data_scaled = scaler.fit_transform(last_data)
     last_data_scaled = np.expand_dims(last_data_scaled, axis=0)
 
-    future_dates = [90, 180, 365, 1095]  # Updated timeframes
+    future_dates = [30, 90, 180, 330]  # Updated prediction periods
     predictions = {}
 
     for days in future_dates:
@@ -29,4 +29,3 @@ def predict_future_prices(model, scaler, df, seq_length=30):
         predictions[f'Price after {days} days'] = future_price
 
     return predictions
-

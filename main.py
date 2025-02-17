@@ -55,13 +55,17 @@ def prepare_data(df, seq_length=30):
 
 # Prediction endpoint
 @app.get("/predict/")
-def predict_price(coin: str = "bitcoin", days: int = 30):
+def predict_price(coin: str = "bitcoin", days: int = 90):
     """
     Predict future cryptocurrency price based on LSTM model.
-    Example URL: /predict/?coin=bitcoin&days=30
+    Available prediction days: 90 (3 months), 180 (6 months), 365 (1 year), 1095 (3 years)
+    Example URL: /predict/?coin=bitcoin&days=90
     """
     try:
-        df = get_historical_data(coin, "usd", 365)
+        if days not in [90, 180, 365, 1095]:
+            raise HTTPException(status_code=400, detail="Invalid prediction period. Use 90, 180, 365, or 1095 days.")
+
+        df = get_historical_data(coin, "usd", 365 * 3)  # Fetch 3 years of data
         df['sentiment'] = get_news_sentiment()
 
         X, scaler = prepare_data(df)
@@ -79,6 +83,7 @@ def predict_price(coin: str = "bitcoin", days: int = 30):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+
 
 # Root endpoint
 @app.get("/")
